@@ -1,0 +1,46 @@
+FROM centos AS builder
+
+RUN yum -y update
+RUN yum -y install wget yum-utils gcc openssl-devel bzip2-devel libffi-devel
+RUN yum -y install patch make
+
+RUN mkdir /src/
+RUN cd /src/ && wget https://www.python.org/ftp/python/3.8.3/Python-3.8.3.tar.xz
+RUN cd /src/ && tar -xvf Python-3.8.3.tar.xz
+
+COPY AVX2-and-AVX512-support.patch /src/
+COPY Build-avx2-and-avx512-versions-of-the-math-library.patch /src/
+COPY Add-pybench-for-pgo-optimization.patch /src/
+COPY use-pybench-to-optimize-python.patch /src/
+RUN cd /src/Python-3.8.3/ && patch -p1 < ../AVX2-and-AVX512-support.patch
+RUN cd /src/Python-3.8.3/ && patch -p1 < ../Build-avx2-and-avx512-versions-of-the-math-library.patch
+RUN cd /src/Python-3.8.3/ && patch -p1 < ../Add-pybench-for-pgo-optimization.patch
+RUN cd /src/Python-3.8.3/ && patch -p1 < ../use-pybench-to-optimize-python.patch
+
+RUN export LANG=C
+RUN export CFLAGS="$CFLAGS -O2  -ftree-vectorize -fopt-info-vec"
+RUN export CXXFLAGS="$CXXFLAGS -march=haswell -mfma"
+RUN mkdir /opt/build/
+
+RUN cd /src/Python-3.8.3/ && ./configure  \
+	LDFLAGS="-Wa,-mbranches-within-32B-boundaries" \
+	--with-pymalloc \
+	--without-cxx-main \
+	--enable-ipv6=yes \
+	--prefix=/opt/build/ \
+	ac_cv_header_bluetooth_bluetooth_h=no \
+	ac_cv_header_bluetooth_h=no \
+	--with-system-ffi \
+	--with-system-expat \
+	--with-lto=8 \
+	--with-computed-gotos \
+	--without-ensurepip \
+	--enable-optimizations
+RUN cd /src/Python-3.8.3/ && make -j8
+RUN cd /src/Python-3.8.3/ && make install
+
+FROM centos:latest
+WORKDIR /root/
+COPY --from=builder /opt/build/ /opt/
+ENV PATH=/opt/bin:$PATH
+CMD python3
